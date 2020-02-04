@@ -9,6 +9,7 @@
 #define PORT 12000
 #define ADDRESS "127.0.0.1"
 #define BUFFER_SIZE 256
+#define ICMP_HEADER_SIZE 8
 
 int sockfd;
 
@@ -62,6 +63,68 @@ void print_ip(uint32_t ip) {
     printf("%d.%d.%d.%d", one, two, three, four);
 }
 
+struct icmp_packet {
+    uint8_t type;
+    uint8_t code;
+    uint16_t checksum;
+    uint16_t identifier;
+    uint16_t seq_nbr;
+    uint16_t data_len;
+    char *data;
+};
+
+uint16_t calc_checksum(struct icmp_packet *packet) {
+    uint32_t sum = 0, i = 0, word;
+
+    while (i < packet->data_len + ICMP_HEADER_SIZE - 1) {
+        word = packet->data[i++] << 8 | packet->data[i++];
+        if (sum + word > __UINT16_MAX__) {
+            sum = (sum + word) % __UINT16_MAX__;
+        } else {
+            sum += word;
+        }
+    }
+
+
+    /*
+    XXX
+    100
+    100
+   1000 
+    001
+    */
+
+}
+
+/* Converts two bytes into a word and turns it from Big Endian to Little Endian */
+uint16_t word(uint8_t b1, uint8_t b2) {
+    uint16_t word = b1 << 8;
+    return htons(word | b2);
+}
+
+/* Extracts all the headers and the data from the icmp packet */
+struct icmp_packet * extract_icmp(char *buffer, uint8_t icmp_start, uint16_t packet_len) {
+
+    struct icmp_packet *packet = malloc(sizeof(struct icmp_packet));
+    packet->data_len = packet_len - icmp_start - ICMP_HEADER_SIZE;
+    
+    packet->data = malloc(sizeof(packet->data_len));            // BITS
+    packet->type = buffer[icmp_start++];                        // 0
+    packet->code = buffer[icmp_start++];                        // 1
+
+    packet->checksum = word(buffer[icmp_start++], buffer[icmp_start++]);
+    packet->identifier = word(buffer[icmp_start++], buffer[icmp_start++]);
+    packet->seq_nbr = word(buffer[icmp_start++], buffer[icmp_start++]);
+   
+    uint16_t i = 0;
+    while (i < packet->data_len) {
+        packet->data[i] = buffer[icmp_start + i++];
+    }
+
+    return packet;
+
+}
+
 int main(void) {
 
     // Prepares the server address
@@ -90,22 +153,31 @@ int main(void) {
     int cli_len = sizeof(cli_addr);
     char *buffer = (char *) malloc(BUFFER_SIZE * sizeof(char));
     
-    int packet_len = recvfrom(sockfd, buffer, BUFFER_SIZE, 0, (struct sockaddr *)
+    uint16_t packet_len = recvfrom(sockfd, buffer, BUFFER_SIZE, 0, (struct sockaddr *)
                                 &cli_addr, &cli_len);
     if (packet_len < 0) {
         error("Failed to recieve packet");
     }
     
-    // Extracts the     
+    // Extracts the IP part of the packet   
     struct ip_header *ip_head = extract_ip_header(buffer);
+
+    // Extracts the ICMP message 
+    uint16_t icmp_start = ip_head->head_len * 4;
+    struct icmp_packet *packet = extract_icmp(buffer, icmp_start, packet_len);
+
+    printf("Type   Code    Checksum \n");
+    printf(" %X    %X           %X     \n", packet->type, packet->code, packet->checksum);
+    printf(" Identifier   Seq nbr    \n");
+    printf("      %X         %X     \n\n", packet->identifier, packet->seq_nbr);
     
     printf("%d\n", ip_head->dst);
-    
     printf("Packet size: %d  ttl: %d\n", packet_len, ip_head->ttl);
 
     close(sockfd);
     
     return 0;
 }
+
 
 

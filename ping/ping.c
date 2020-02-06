@@ -1,6 +1,7 @@
 #include <arpa/inet.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/ip.h>
@@ -73,27 +74,22 @@ struct icmp_packet {
     char *data;
 };
 
-uint16_t calc_checksum(struct icmp_packet *packet) {
-    uint32_t sum = 0, i = 0, word;
+uint16_t calc_checksum(char *packet, u_int16_t packet_len) {
 
-    while (i < packet->data_len + ICMP_HEADER_SIZE - 1) {
-        word = packet->data[i++] << 8 | packet->data[i++];
-        if (sum + word > __UINT16_MAX__) {
-            sum = (sum + word) % __UINT16_MAX__;
-        } else {
-            sum += word;
-        }
+    uint16_t word, i;
+    uint32_t sum=0;
+    
+    for (uint16_t i = 0; i < packet_len; i += 2) {
+        word = (uint16_t) ( (packet[i] << 8) & 0xff00) + (packet[i+1] & 0xff);
+        sum += word;
     }
 
+    while (sum << 16) {
+        sum = (sum & 0xffff) + (sum >> 16);
+        sum = ~sum;
+    }
 
-    /*
-    XXX
-    100
-    100
-   1000 
-    001
-    */
-
+    return (uint16_t) sum;
 }
 
 /* Converts two bytes into a word and turns it from Big Endian to Little Endian */
@@ -116,10 +112,22 @@ struct icmp_packet * extract_icmp(char *buffer, uint8_t icmp_start, uint16_t pac
     packet->identifier = word(buffer[icmp_start++], buffer[icmp_start++]);
     packet->seq_nbr = word(buffer[icmp_start++], buffer[icmp_start++]);
    
+    printf("EXTRA LENGTH: %d\n", packet->data_len);
+
+    //TODO: Extra 8 bits is the timestamp!
+
     uint16_t i = 0;
     while (i < packet->data_len) {
         packet->data[i] = buffer[icmp_start + i++];
     }
+
+    i = 0;
+    while (i < packet->data_len) {
+        printf(" %.2X ", (uint8_t) packet->data[i++]);
+    }
+
+    printf("\n");
+    
 
     return packet;
 
@@ -145,7 +153,6 @@ int main(void) {
     if (bind(sockfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0) {
         error("Can't bind!");
     }
-    printf("\nListening\n");    // Debugging
     
     // Prepares the address of the client and allocates
     // memory for a buffer to store the packet in.
@@ -166,14 +173,32 @@ int main(void) {
     uint16_t icmp_start = ip_head->head_len * 4;
     struct icmp_packet *packet = extract_icmp(buffer, icmp_start, packet_len);
 
-    printf("Type   Code    Checksum \n");
-    printf(" %X    %X           %X     \n", packet->type, packet->code, packet->checksum);
-    printf(" Identifier   Seq nbr    \n");
-    printf("      %X         %X     \n\n", packet->identifier, packet->seq_nbr);
+    uint16_t checksum = calc_checksum(buffer + icmp_start, packet_len - icmp_start);
+    char *check = checksum ? "BAD" : "OK";
     
-    printf("%d\n", ip_head->dst);
-    printf("Packet size: %d  ttl: %d\n", packet_len, ip_head->ttl);
+    printf("__________________________\n");
+    printf("|    TTL      | Pkt Size |\n");
+    printf("|    %d       |    %d    |\n", ip_head->ttl, packet_len);
+    printf("__________________________\n");
+    printf("| Type | Code | Checksum |\n");
+    printf("|  %.2X  |  %.2X  |   %.4X   |\n", packet->type, packet->code, packet->checksum);
+    printf("__________________________\n");
+    printf("| Checksum:   |    %s    |\n", check);
+    printf("__________________________\n");
+    printf("| Identifier  |  Seq nbr |\n");
+    printf("|    %.4X     |   %.4X   | \n", packet->identifier, packet->seq_nbr);
+    printf("__________________________\n");
+    printf("           DATA          \n");
+    for (int i = 1; i < packet->data_len; i++) {
+        if (i % 4 == 0 && i != 0) {
+            //printf("\n");
+        }
+        //printf("  %.2X  ", (uint8_t) packet->data[i]);
+        
+    }
+    printf("\n");
 
+    
     close(sockfd);
     
     return 0;
